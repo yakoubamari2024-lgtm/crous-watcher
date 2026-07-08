@@ -4,7 +4,7 @@ import sys
 import requests
 
 CROUS_URL = "https://trouverunlogement.lescrous.fr/tools/47/search?bounds=2.9679677_50.6612596_3.125725_50.6008264&locationName=Lille"
-FRANCE_URL = "https://trouverunlogement.lescrous.fr/tools/47/search?bounds=-5.5_51.5_9.6_41.3"
+FRANCE_URL = "https://trouverunlogement.lescrous.fr/tools/47/search"
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
