@@ -4,6 +4,7 @@ import sys
 import requests
 
 CROUS_URL = "https://trouverunlogement.lescrous.fr/tools/47/search?bounds=2.9679677_50.6612596_3.125725_50.6008264&locationName=Lille"
+FRANCE_URL = "https://trouverunlogement.lescrous.fr/tools/47/search?bounds=-5.5_51.5_9.6_41.3"
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
@@ -18,6 +19,29 @@ def send_telegram_message(text: str) -> None:
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     resp = requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": text}, timeout=20)
     resp.raise_for_status()
+
+
+def get_france_total() -> str:
+    try:
+        resp = requests.get(FRANCE_URL, headers=HEADERS, timeout=20)
+        resp.raise_for_status()
+        html = resp.text
+        match = re.search(r"(\d+)\s+logements?\s+trouvés?\s+en\s+France", html, re.IGNORECASE)
+        if match:
+            count = match.group(1)
+            return f"{count} logement(s) au total en France"
+        if "Aucun logement trouvé" in html:
+            return "0 logement en France actuellement"
+        return "total France indisponible (page inattendue)"
+    except Exception as e:
+        return f"total France indisponible (erreur: {e})"
+
+
+def send_france_summary() -> None:
+    france_total = get_france_total()
+    print(f"Résumé France : {france_total}")
+    message = f"📊 Résumé CROUS — {france_total}"
+    send_telegram_message(message)
 
 
 def check_crous() -> None:
@@ -41,20 +65,27 @@ def check_crous() -> None:
 
     has_listings = (not no_results) and (total_pages is None or total_pages > 0)
 
+    france_total = get_france_total()
+    print(f"France: {france_total}")
+
     if has_listings:
-        print("Logement(s) potentiellement disponible(s) ! Envoi de l'alerte...")
+        print("Logement(s) potentiellement disponible(s) à Lille ! Envoi de l'alerte...")
         message = (
             "🏠 Un logement est peut-être disponible sur le CROUS Lille !\n"
-            f"{CROUS_URL}"
+            f"{CROUS_URL}\n\n"
+            f"📊 {france_total}"
         )
         send_telegram_message(message)
     else:
-        print("Pas de logement dispo pour le moment.")
+        print(f"Pas de logement dispo à Lille pour le moment. ({france_total})")
 
 
 if __name__ == "__main__":
     try:
-        check_crous()
+        if "--france-summary" in sys.argv:
+            send_france_summary()
+        else:
+            check_crous()
     except Exception as e:
         print(f"Erreur : {e}", file=sys.stderr)
         sys.exit(1)
