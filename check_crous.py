@@ -39,12 +39,22 @@ def get_france_total() -> str:
         if match:
             return f"{match.group(1)} logement(s) au total en France"
 
+        text_only = re.sub(r"<[^>]+>", " ", html)
+        text_only = re.sub(r"\s+", " ", text_only)
+        snippets = re.findall(r".{25}\d+.{0,10}logement.{25}", text_only, re.IGNORECASE)
+        snippets += re.findall(r".{25}logement.{0,10}\d+.{25}", text_only, re.IGNORECASE)
+        unique_snippets = list(dict.fromkeys(snippets))[:3]
+
+        if unique_snippets:
+            joined = " | ".join(unique_snippets)
+            return f"diagnostic (titre='{title}') extraits: {joined}"
+
         page_match = re.search(r"page\s+\d+\s+sur\s+(\d+)", title, re.IGNORECASE)
         if page_match:
             total_pages = int(page_match.group(1))
             if total_pages == 0:
                 return "0 logement en France actuellement"
-            return f"des logements disponibles en France (env. {total_pages} page(s) de résultats)"
+            return f"des logements disponibles en France (env. {total_pages} page(s) de résultats) — titre: '{title}'"
 
         return f"total France indisponible — titre reçu: '{title}'"
     except Exception as e:
