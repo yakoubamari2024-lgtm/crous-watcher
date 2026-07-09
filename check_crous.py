@@ -22,17 +22,31 @@ def send_telegram_message(text: str) -> None:
 
 
 def get_france_total() -> str:
+    """Retourne un texte du type '19 logement(s) au total en France' ou un message de diagnostic."""
     try:
         resp = requests.get(FRANCE_URL, headers=HEADERS, timeout=20)
         resp.raise_for_status()
         html = resp.text
+
+        title_match = re.search(r"<title>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
+        title = title_match.group(1).strip() if title_match else "titre introuvable"
+
+        print(f"DEBUG France - URL finale après redirection: {resp.url}")
+        print(f"DEBUG France - titre: {title}")
+        print(f"DEBUG France - taille html: {len(html)}")
+
         match = re.search(r"(\d+)\s+logements?\s+trouvés?\s+en\s+France", html, re.IGNORECASE)
         if match:
-            count = match.group(1)
-            return f"{count} logement(s) au total en France"
-        if "Aucun logement trouvé" in html:
-            return "0 logement en France actuellement"
-        return "total France indisponible (page inattendue)"
+            return f"{match.group(1)} logement(s) au total en France"
+
+        page_match = re.search(r"page\s+\d+\s+sur\s+(\d+)", title, re.IGNORECASE)
+        if page_match:
+            total_pages = int(page_match.group(1))
+            if total_pages == 0:
+                return "0 logement en France actuellement"
+            return f"des logements disponibles en France (env. {total_pages} page(s) de résultats)"
+
+        return f"total France indisponible — titre reçu: '{title}'"
     except Exception as e:
         return f"total France indisponible (erreur: {e})"
 
