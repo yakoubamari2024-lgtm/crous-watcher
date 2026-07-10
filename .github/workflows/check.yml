@@ -2,7 +2,7 @@ name: Check CROUS Lille
 
 on:
   schedule:
-    - cron: "* * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch: {}
 
 permissions:
