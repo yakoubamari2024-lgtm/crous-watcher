@@ -1,10 +1,16 @@
+import json
 import os
 import re
 import sys
+import time
 import requests
 
 CROUS_URL = "https://trouverunlogement.lescrous.fr/tools/47/search?bounds=2.9679677_50.6612596_3.125725_50.6008264&locationName=Lille"
 FRANCE_URL = "https://trouverunlogement.lescrous.fr/tools/47/search"
+
+FRANCE_STATE_FILE = "france_count.txt"
+LILLE_STATE_FILE = "lille_state.json"
+STATUS_INTERVAL_SECONDS = 10 * 60  # 10 minutes
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
@@ -21,8 +27,7 @@ def send_telegram_message(text: str) -> None:
     resp.raise_for_status()
 
 
-def get_france_total() -> str:
-    """Retourne un texte du type '21 logement(s) au total en France'."""
+def get_france_count():
     try:
         resp = requests.get(FRANCE_URL, headers=HEADERS, timeout=20)
         resp.raise_for_status()
@@ -31,21 +36,72 @@ def get_france_total() -> str:
 
         match = re.search(r"(\d+)\s+logements?\s+trouvés?\s+en\s+France", html, re.IGNORECASE)
         if match:
-            return f"{match.group(1)} logement(s) au total en France"
+            return int(match.group(1))
 
         if "Aucun logement trouvé" in html:
-            return "0 logement en France actuellement"
+            return 0
 
-        return "total France indisponible (page inattendue)"
+        return None
     except Exception as e:
-        return f"total France indisponible (erreur: {e})"
+        print(f"Erreur en récupérant le total France : {e}")
+        return None
+
+
+def read_previous_france_count():
+    if not os.path.exists(FRANCE_STATE_FILE):
+        return None
+    try:
+        with open(FRANCE_STATE_FILE, "r") as f:
+            content = f.read().strip()
+            return int(content) if content else None
+    except Exception:
+        return None
+
+
+def write_current_france_count(count: int) -> None:
+    with open(FRANCE_STATE_FILE, "w") as f:
+        f.write(str(count))
 
 
 def send_france_summary() -> None:
-    france_total = get_france_total()
-    print(f"Résumé France : {france_total}")
-    message = f"📊 Résumé CROUS — {france_total}"
-    send_telegram_message(message)
+    current = get_france_count()
+    if current is None:
+        print("Impossible de déterminer le total France pour le moment, pas d'alerte.")
+        return
+
+    previous = read_previous_france_count()
+    print(f"Total France actuel: {current}, précédent connu: {previous}")
+
+    if previous is None:
+        print("Premier relevé, on enregistre sans notifier.")
+        write_current_france_count(current)
+        return
+
+    if current != previous:
+        direction = "📈 en hausse" if current > previous else "📉 en baisse"
+        message = (
+            f"📊 Le nombre de logements en France a changé ({direction}) !\n"
+            f"Avant : {previous} → Maintenant : {current}"
+        )
+        send_telegram_message(message)
+        write_current_france_count(current)
+    else:
+        print("Pas de changement, aucune alerte envoyée.")
+
+
+def read_lille_state() -> dict:
+    if not os.path.exists(LILLE_STATE_FILE):
+        return {"last_alert": None, "last_status": None}
+    try:
+        with open(LILLE_STATE_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {"last_alert": None, "last_status": None}
+
+
+def write_lille_state(state: dict) -> None:
+    with open(LILLE_STATE_FILE, "w") as f:
+        json.dump(state, f)
 
 
 def check_crous() -> None:
@@ -70,19 +126,39 @@ def check_crous() -> None:
 
     has_listings = (not no_results) and (total_pages is None or total_pages > 0)
 
-    france_total = get_france_total()
-    print(f"France: {france_total}")
+    now = int(time.time())
+    state = read_lille_state()
+    heure = time.strftime("%H:%M", time.gmtime(now + 2 * 3600))
 
     if has_listings:
-        print("Logement(s) potentiellement disponible(s) à Lille ! Envoi de l'alerte...")
-        message = (
-            "🏠 Un logement est peut-être disponible sur le CROUS Lille !\n"
-            f"{CROUS_URL}\n\n"
-            f"📊 {france_total}"
-        )
-        send_telegram_message(message)
+        last_alert = state.get("last_alert")
+        if last_alert is None or (now - last_alert) >= STATUS_INTERVAL_SECONDS:
+            print("Logement disponible à Lille ! Envoi de 5 notifications...")
+            france_count = get_france_count()
+            france_text = f"{france_count} logement(s) au total en France" if france_count is not None else "total France indisponible"
+            message = (
+                "🏠🏠🏠 UN LOGEMENT EST DISPONIBLE SUR LE CROUS LILLE ! 🏠🏠🏠\n"
+                f"{CROUS_URL}\n\n"
+                f"📊 {france_text}\n"
+                f"⏰ {heure}"
+            )
+            for _ in range(5):
+                send_telegram_message(message)
+            state["last_alert"] = now
+            write_lille_state(state)
+        else:
+            restant = STATUS_INTERVAL_SECONDS - (now - last_alert)
+            print(f"Déjà alerté récemment, prochaine relance possible dans {restant}s.")
     else:
-        print(f"Pas de logement dispo à Lille pour le moment. ({france_total})")
+        last_status = state.get("last_status")
+        if last_status is None or (now - last_status) >= STATUS_INTERVAL_SECONDS:
+            print("Pas de logement à Lille, envoi du message de statut.")
+            message = f"❌ Toujours aucun logement dispo à Lille pour le moment. (vérifié à {heure})"
+            send_telegram_message(message)
+            state["last_status"] = now
+            write_lille_state(state)
+        else:
+            print("Pas de logement, mais message de statut déjà envoyé il y a moins de 10 min.")
 
 
 if __name__ == "__main__":
