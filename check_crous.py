@@ -5,12 +5,20 @@ import sys
 import time
 import requests
 
-CROUS_URL = "https://trouverunlogement.lescrous.fr/tools/47/search?bounds=2.9679677_50.6612596_3.125725_50.6008264&locationName=Lille"
 FRANCE_URL = "https://trouverunlogement.lescrous.fr/tools/47/search"
-
 FRANCE_STATE_FILE = "france_count.txt"
-LILLE_STATE_FILE = "lille_state.json"
 STATUS_INTERVAL_SECONDS = 10 * 60  # 10 minutes
+
+CITIES = {
+    "Lille": {
+        "url": "https://trouverunlogement.lescrous.fr/tools/47/search?bounds=2.9679677_50.6612596_3.125725_50.6008264&locationName=Lille",
+        "state_file": "lille_state.json",
+    },
+    "Amiens": {
+        "url": "https://trouverunlogement.lescrous.fr/tools/42/search?bounds=2.230193288554232_49.94296600971674_2.369806711445768_49.853033990283265&locationName=Amiens",
+        "state_file": "amiens_state.json",
+    },
+}
 
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
@@ -89,28 +97,28 @@ def send_france_summary() -> None:
         print("Pas de changement, aucune alerte envoyée.")
 
 
-def read_lille_state() -> dict:
-    if not os.path.exists(LILLE_STATE_FILE):
+def read_city_state(state_file: str) -> dict:
+    if not os.path.exists(state_file):
         return {"last_alert": None, "last_status": None}
     try:
-        with open(LILLE_STATE_FILE, "r") as f:
+        with open(state_file, "r") as f:
             return json.load(f)
     except Exception:
         return {"last_alert": None, "last_status": None}
 
 
-def write_lille_state(state: dict) -> None:
-    with open(LILLE_STATE_FILE, "w") as f:
+def write_city_state(state_file: str, state: dict) -> None:
+    with open(state_file, "w") as f:
         json.dump(state, f)
 
 
-def check_crous() -> None:
-    resp = requests.get(CROUS_URL, headers=HEADERS, timeout=20)
+def check_city(city_name: str, url: str, state_file: str) -> None:
+    resp = requests.get(url, headers=HEADERS, timeout=20)
     resp.raise_for_status()
     resp.encoding = "utf-8"
     html = resp.text
 
-    print(f"Status code: {resp.status_code}, taille de la page: {len(html)} caractères")
+    print(f"[{city_name}] Status code: {resp.status_code}, taille de la page: {len(html)} caractères")
 
     no_results = "Aucun logement trouvé" in html
     is_real_page = "Trouver un logement" in html or "trouverunlogement" in html.lower()
@@ -118,47 +126,55 @@ def check_crous() -> None:
     match = re.search(r"page\s+(\d+)\s+sur\s+(\d+)", html, re.IGNORECASE)
     total_pages = int(match.group(2)) if match else None
 
-    print(f"is_real_page={is_real_page}, no_results_text={no_results}, total_pages={total_pages}")
+    print(f"[{city_name}] is_real_page={is_real_page}, no_results_text={no_results}, total_pages={total_pages}")
 
     if not is_real_page:
-        print("La page reçue ne ressemble pas à la vraie page CROUS (blocage/anti-bot ?). Pas d'alerte envoyée, à surveiller.")
+        print(f"[{city_name}] Page reçue suspecte (blocage/anti-bot ?). Pas d'alerte envoyée.")
         return
 
     has_listings = (not no_results) and (total_pages is None or total_pages > 0)
 
     now = int(time.time())
-    state = read_lille_state()
+    state = read_city_state(state_file)
     heure = time.strftime("%H:%M", time.gmtime(now + 2 * 3600))
 
     if has_listings:
         last_alert = state.get("last_alert")
         if last_alert is None or (now - last_alert) >= STATUS_INTERVAL_SECONDS:
-            print("Logement disponible à Lille ! Envoi de 5 notifications...")
+            print(f"[{city_name}] Logement disponible ! Envoi de 5 notifications...")
             france_count = get_france_count()
             france_text = f"{france_count} logement(s) au total en France" if france_count is not None else "total France indisponible"
             message = (
-                "🏠🏠🏠 UN LOGEMENT EST DISPONIBLE SUR LE CROUS LILLE ! 🏠🏠🏠\n"
-                f"{CROUS_URL}\n\n"
+                f"🏠🏠🏠 UN LOGEMENT EST DISPONIBLE SUR LE CROUS {city_name.upper()} ! 🏠🏠🏠\n"
+                f"{url}\n\n"
                 f"📊 {france_text}\n"
                 f"⏰ {heure}"
             )
             for _ in range(5):
                 send_telegram_message(message)
             state["last_alert"] = now
-            write_lille_state(state)
+            write_city_state(state_file, state)
         else:
             restant = STATUS_INTERVAL_SECONDS - (now - last_alert)
-            print(f"Déjà alerté récemment, prochaine relance possible dans {restant}s.")
+            print(f"[{city_name}] Déjà alerté récemment, prochaine relance possible dans {restant}s.")
     else:
         last_status = state.get("last_status")
         if last_status is None or (now - last_status) >= STATUS_INTERVAL_SECONDS:
-            print("Pas de logement à Lille, envoi du message de statut.")
-            message = f"❌ Toujours aucun logement dispo à Lille pour le moment. (vérifié à {heure})"
+            print(f"[{city_name}] Pas de logement, envoi du message de statut.")
+            message = f"❌ Toujours aucun logement dispo à {city_name} pour le moment. (vérifié à {heure})"
             send_telegram_message(message)
             state["last_status"] = now
-            write_lille_state(state)
+            write_city_state(state_file, state)
         else:
-            print("Pas de logement, mais message de statut déjà envoyé il y a moins de 10 min.")
+            print(f"[{city_name}] Pas de logement, message de statut déjà envoyé il y a moins de 10 min.")
+
+
+def check_all_cities() -> None:
+    for city_name, info in CITIES.items():
+        try:
+            check_city(city_name, info["url"], info["state_file"])
+        except Exception as e:
+            print(f"[{city_name}] Erreur : {e}")
 
 
 if __name__ == "__main__":
@@ -166,7 +182,7 @@ if __name__ == "__main__":
         if "--france-summary" in sys.argv:
             send_france_summary()
         else:
-            check_crous()
+            check_all_cities()
     except Exception as e:
         print(f"Erreur : {e}", file=sys.stderr)
         sys.exit(1)
