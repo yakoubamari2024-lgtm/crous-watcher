@@ -33,9 +33,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          if [ -n "$(git status --porcelain lille_state.json)" ]; then
-            git add lille_state.json
-            git commit -m "Update Lille state"
+          if [ -n "$(git status --porcelain lille_state.json amiens_state.json)" ]; then
+            git add lille_state.json amiens_state.json
+            git commit -m "Update city states"
             git pull --rebase
             git push
           else
